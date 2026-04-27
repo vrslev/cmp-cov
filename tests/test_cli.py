@@ -12,6 +12,12 @@ def cache_subdir(cache_dir: pathlib.Path, project_dir: pathlib.Path) -> pathlib.
     return cache_dir / urllib.parse.quote(str(project_dir), safe="")
 
 
+def baseline_subdir(
+    cache_dir: pathlib.Path, project_dir: pathlib.Path, baseline_name: str = "default",
+) -> pathlib.Path:
+    return cache_subdir(cache_dir, project_dir) / urllib.parse.quote(baseline_name, safe="")
+
+
 def test_save_baseline_creates_cache_files(project_dir, cache_dir, cli_runner):
     write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
     write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
@@ -19,12 +25,42 @@ def test_save_baseline_creates_cache_files(project_dir, cache_dir, cli_runner):
     exit_code, stdout, _ = cli_runner(project_dir, "save-baseline")
 
     assert exit_code == 0
-    project_cache = cache_subdir(cache_dir, project_dir)
-    assert (project_cache / "coverage.xml").is_file()
-    assert (project_cache / "sources" / "foo.py").is_file()
-    assert (project_cache / "sources" / "foo.py").read_text() == SOURCE_FIVE_LINES
-    assert "Saved baseline" in stdout
+    baseline = baseline_subdir(cache_dir, project_dir)
+    assert (baseline / "coverage.xml").is_file()
+    assert (baseline / "sources" / "foo.py").is_file()
+    assert (baseline / "sources" / "foo.py").read_text() == SOURCE_FIVE_LINES
+    assert "Saved baseline 'default'" in stdout
     assert "total:   100.00%" in stdout
+
+
+def test_save_baseline_with_explicit_name(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+
+    exit_code, stdout, _ = cli_runner(project_dir, "save-baseline", "main")
+
+    assert exit_code == 0
+    assert "Saved baseline 'main'" in stdout
+    assert (baseline_subdir(cache_dir, project_dir, "main") / "coverage.xml").is_file()
+    assert not baseline_subdir(cache_dir, project_dir, "default").exists()
+
+
+def test_named_baselines_coexist(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline", "main")
+
+    write_coverage_data(project_dir, {"foo.py": [1, 2]})
+    cli_runner(project_dir, "save-baseline", "feature")
+
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    main_exit, main_stdout, _ = cli_runner(project_dir, "diff", "main")
+    feature_exit, feature_stdout, _ = cli_runner(project_dir, "diff", "feature")
+
+    assert main_exit == 0
+    assert "Total: 100.00% → 100.00%" in main_stdout
+    assert feature_exit == 0
+    assert "Total: 40.00% → 100.00%" in feature_stdout
 
 
 def test_save_baseline_overwrites_existing(project_dir, cache_dir, cli_runner):
@@ -63,7 +99,19 @@ def test_diff_no_baseline_fails(project_dir, cache_dir, cli_runner):
     exit_code, _, stderr = cli_runner(project_dir, "diff")
 
     assert exit_code == 1
-    assert "no baseline" in stderr
+    assert "no baseline 'default'" in stderr
+
+
+def test_diff_unknown_name_lists_available(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline", "main")
+
+    exit_code, _, stderr = cli_runner(project_dir, "diff", "missing")
+
+    assert exit_code == 1
+    assert "no baseline 'missing'" in stderr
+    assert "'main'" in stderr
 
 
 def test_diff_no_changes_exits_zero(project_dir, cache_dir, cli_runner):
