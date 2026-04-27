@@ -217,18 +217,15 @@ def translate_baseline(
 
 
 def compute_line_runs(lineno_list: list[int]) -> list[tuple[int, int]]:
-    if not lineno_list:
-        return []
-    sorted_linenos: typing.Final = sorted(lineno_list)
     runs_acc: list[tuple[int, int]] = []
-    run_start = run_prev = sorted_linenos[0]
-    for current_lineno in sorted_linenos[1:]:
-        if current_lineno - run_prev - 1 <= MAX_RUN_GAP:
-            run_prev = current_lineno
-            continue
-        runs_acc.append((run_start, run_prev - run_start + 1))
-        run_start = run_prev = current_lineno
-    runs_acc.append((run_start, run_prev - run_start + 1))
+    for current_lineno in sorted(lineno_list):
+        if runs_acc:
+            run_start, run_length = runs_acc[-1]
+            run_end = run_start + run_length - 1
+            if current_lineno - run_end - 1 <= MAX_RUN_GAP:
+                runs_acc[-1] = (run_start, current_lineno - run_start + 1)
+                continue
+        runs_acc.append((current_lineno, 1))
     return runs_acc
 
 

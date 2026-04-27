@@ -26,9 +26,6 @@ testpaths = ["tests"]
 [project.scripts]
 cmp-cov = "cmp_cov.cli:main"
 
-[[tool.uv.index]]
-url = "https://artifactory.raiffeisen.ru/artifactory/api/pypi/remote-pypi/simple"
-
 [build-system]
 requires = ["uv-build"]
 build-backend = "uv_build"
