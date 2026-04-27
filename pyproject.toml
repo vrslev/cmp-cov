@@ -1,0 +1,25 @@
+[project]
+name = "cmp-cov"
+version = "0.1.0"
+description = "Compare local pytest coverage against a saved baseline."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Lev Vereshchagin", email = "main@vrslev.com" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = ["coverage>=7"]
+
+[project.scripts]
+cmp-cov = "cmp_cov.cli:main"
+
+[build-system]
+requires = ["uv-build"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
