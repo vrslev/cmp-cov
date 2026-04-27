@@ -4,8 +4,6 @@ Compare local pytest coverage against a saved baseline.
 
 ## Usage
 
-Run without installing via `uvx`:
-
 ```bash
 # After running pytest --cov, save current coverage as the baseline:
 uvx cmp-cov save-baseline
@@ -13,8 +11,6 @@ uvx cmp-cov save-baseline
 # Later, after another pytest --cov run, diff against the baseline:
 uvx cmp-cov diff
 ```
-
-Or install it with `uv tool install cmp-cov` and call `cmp-cov` directly.
 
 `save-baseline` snapshots the current `.coverage` (SQLite) and source files into
 `~/.cache/cmp-coverage/<encoded-project-path>/`. `diff` regenerates current
