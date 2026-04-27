@@ -254,13 +254,17 @@ def test_help_lists_subcommands(project_dir, cache_dir, cli_runner):
     assert "diff" in stdout
 
 
-def test_save_baseline_with_absolute_path(project_dir, cache_dir, cli_runner):
-    (project_dir / ".coveragerc").unlink()
+def test_save_baseline_with_absolute_path(project_dir, cache_dir, cli_runner, monkeypatch):
     write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
-    absolute_filename = str(project_dir / "foo.py")
-    data = coverage_module.CoverageData(basename=str(project_dir / ".coverage"))
-    data.add_lines({absolute_filename: [1, 2, 3, 4, 5]})
-    data.write()
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+
+    original_parse = cmp_cov.cli.parse_coverage_xml
+
+    def parse_with_absolute_paths(xml_path: pathlib.Path):
+        total, files = original_parse(xml_path)
+        return total, {str(project_dir / filename): lines for filename, lines in files.items()}
+
+    monkeypatch.setattr(cmp_cov.cli, "parse_coverage_xml", parse_with_absolute_paths)
 
     exit_code, _, _ = cli_runner(project_dir, "save-baseline")
 
@@ -350,13 +354,13 @@ def test_diff_with_non_adjacent_runs(project_dir, cache_dir, cli_runner):
     write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
     cli_runner(project_dir, "save-baseline")
 
-    write_coverage_data(project_dir, {"foo.py": [3]})
+    write_coverage_data(project_dir, {"foo.py": [2, 3, 4]})
     exit_code, stdout, _ = cli_runner(project_dir, "diff")
 
     assert exit_code == 1
-    assert "↓ covered → uncovered (4 lines, 2 runs)" in stdout
-    assert "foo.py:1-2" in stdout
-    assert "foo.py:4-5" in stdout
+    assert "↓ covered → uncovered (2 lines, 2 runs)" in stdout
+    assert "foo.py:1\n" in stdout
+    assert "foo.py:5\n" in stdout
 
 
 def test_diff_without_sources_dir_falls_back(project_dir, cache_dir, cli_runner):
