@@ -1,6 +1,13 @@
 import pathlib
+import runpy
+import shutil
+import sys
 import urllib.parse
 
+import coverage as coverage_module
+import pytest
+
+import cmp_cov.cli
 from tests.conftest import write_coverage_data, write_source
 
 
@@ -245,3 +252,133 @@ def test_help_lists_subcommands(project_dir, cache_dir, cli_runner):
     assert exit_code == 0
     assert "save-baseline" in stdout
     assert "diff" in stdout
+
+
+def test_save_baseline_with_absolute_path(project_dir, cache_dir, cli_runner):
+    (project_dir / ".coveragerc").unlink()
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    absolute_filename = str(project_dir / "foo.py")
+    data = coverage_module.CoverageData(basename=str(project_dir / ".coverage"))
+    data.add_lines({absolute_filename: [1, 2, 3, 4, 5]})
+    data.write()
+
+    exit_code, _, _ = cli_runner(project_dir, "save-baseline")
+
+    assert exit_code == 0
+    abs_root = baseline_subdir(cache_dir, project_dir) / "sources" / "_abs"
+    assert abs_root.is_dir()
+    snapshotted = list(abs_root.rglob("foo.py"))
+    assert len(snapshotted) == 1
+    assert snapshotted[0].read_text() == SOURCE_FIVE_LINES
+
+
+def test_diff_with_corrupted_baseline_xml_fails(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline")
+
+    baseline_xml = baseline_subdir(cache_dir, project_dir) / "coverage.xml"
+    baseline_xml.write_text('<?xml version="1.0" ?><coverage version="7"/>')
+
+    exit_code, _, stderr = cli_runner(project_dir, "diff")
+
+    assert exit_code == 1
+    assert "malformed coverage XML" in stderr
+
+
+def test_diff_skips_class_without_filename(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline")
+
+    baseline_xml = baseline_subdir(cache_dir, project_dir) / "coverage.xml"
+    content = baseline_xml.read_text()
+    injected = content.replace(
+        "</classes>",
+        '<class name="weird" line-rate="1"><lines/></class></classes>',
+        1,
+    )
+    assert injected != content
+    baseline_xml.write_text(injected)
+
+    exit_code, stdout, _ = cli_runner(project_dir, "diff")
+
+    assert exit_code == 0
+    assert "No per-line changes." in stdout
+
+
+def test_save_baseline_skips_missing_source(project_dir, cache_dir, cli_runner, monkeypatch):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_source(project_dir, "bar.py", SOURCE_THREE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5], "bar.py": [1, 2, 3]})
+
+    original_parse = cmp_cov.cli.parse_coverage_xml
+
+    def parse_then_delete_bar(xml_path: pathlib.Path) -> tuple[float, dict[str, dict[int, int]]]:
+        result = original_parse(xml_path)
+        (project_dir / "bar.py").unlink()
+        return result
+
+    monkeypatch.setattr(cmp_cov.cli, "parse_coverage_xml", parse_then_delete_bar)
+
+    exit_code, stdout, _ = cli_runner(project_dir, "save-baseline")
+
+    assert exit_code == 0
+    assert "sources: 1 files" in stdout
+    assert (baseline_subdir(cache_dir, project_dir) / "sources" / "foo.py").is_file()
+    assert not (baseline_subdir(cache_dir, project_dir) / "sources" / "bar.py").exists()
+
+
+def test_diff_with_missing_snapshot_falls_back(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_source(project_dir, "bar.py", SOURCE_THREE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5], "bar.py": [1, 2, 3]})
+    cli_runner(project_dir, "save-baseline")
+
+    (baseline_subdir(cache_dir, project_dir) / "sources" / "bar.py").unlink()
+
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5], "bar.py": [1, 2, 3]})
+    exit_code, stdout, stderr = cli_runner(project_dir, "diff")
+
+    assert exit_code == 0
+    assert "WARN: 1 file(s) had no source snapshot" in stderr
+    assert "No per-line changes." in stdout
+
+
+def test_diff_with_non_adjacent_runs(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline")
+
+    write_coverage_data(project_dir, {"foo.py": [3]})
+    exit_code, stdout, _ = cli_runner(project_dir, "diff")
+
+    assert exit_code == 1
+    assert "↓ covered → uncovered (4 lines, 2 runs)" in stdout
+    assert "foo.py:1-2" in stdout
+    assert "foo.py:4-5" in stdout
+
+
+def test_diff_without_sources_dir_falls_back(project_dir, cache_dir, cli_runner):
+    write_source(project_dir, "foo.py", SOURCE_FIVE_LINES)
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    cli_runner(project_dir, "save-baseline")
+
+    shutil.rmtree(baseline_subdir(cache_dir, project_dir) / "sources")
+
+    write_coverage_data(project_dir, {"foo.py": [1, 2, 3, 4, 5]})
+    exit_code, stdout, stderr = cli_runner(project_dir, "diff")
+
+    assert exit_code == 0
+    assert "WARN: 1 file(s) had no source snapshot" in stderr
+    assert "No per-line changes." in stdout
+
+
+def test_module_runs_as_main_via_runpy(project_dir, cache_dir, monkeypatch):
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(sys, "argv", ["cmp-cov", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("cmp_cov.cli", run_name="__main__")
+
+    assert exc_info.value.code == 0
