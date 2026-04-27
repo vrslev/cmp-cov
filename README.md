@@ -12,8 +12,17 @@ uvx cmp-cov save-baseline
 uvx cmp-cov diff
 ```
 
+Both subcommands take an optional baseline name (default `default`); each name
+is a separate slot, so multiple baselines per project coexist:
+
+```bash
+cmp-cov save-baseline main
+cmp-cov save-baseline before-refactor
+cmp-cov diff main
+```
+
 `save-baseline` snapshots the current `.coverage` (SQLite) and source files into
-`~/.cache/cmp-coverage/<encoded-project-path>/`. `diff` regenerates current
+`~/.cache/cmp-coverage/<encoded-project-path>/<name>/`. `diff` regenerates current
 coverage XML, translates baseline line numbers through the snapshotted sources
 (so source edits between save and diff are handled), and prints per-line diffs
 grouped by category. Exit code is non-zero if total coverage dropped or any
