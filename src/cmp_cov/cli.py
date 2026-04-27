@@ -1,12 +1,14 @@
 """Compare local pytest coverage against a saved baseline.
 
 Subcommands:
-  save-baseline - convert current .coverage (in git toplevel of CWD) to XML and
-                  store as the baseline for this project in ~/.cache/cmp-coverage/.
-  diff          - convert current .coverage to XML and diff against the saved
-                  baseline.
+  save-baseline [name] - convert current .coverage (in git toplevel of CWD) to
+                         XML and store as the named baseline (default name:
+                         "default") in ~/.cache/cmp-coverage/.
+  diff          [name] - convert current .coverage to XML and diff against the
+                         named baseline (default name: "default").
 
-One baseline per project path. `save-baseline` overwrites the previous baseline.
+Multiple named baselines per project are supported. `save-baseline` overwrites
+the baseline with the same name.
 """
 
 import argparse
@@ -30,6 +32,7 @@ CACHE_DIR: typing.Final = pathlib.Path.home() / ".cache" / "cmp-coverage"
 COVERAGE_EPSILON: typing.Final = 0.01
 MAX_RUN_GAP: typing.Final = 2
 ABS_PATH_PREFIX: typing.Final = "_abs"
+DEFAULT_BASELINE_NAME: typing.Final = "default"
 
 BUCKET_REGRESSION: typing.Final = "↓ covered → uncovered"
 BUCKET_NEW_UNCOVERED: typing.Final = "+ new uncovered"
@@ -74,12 +77,25 @@ def build_cache_dir(project_root: pathlib.Path) -> pathlib.Path:
     return CACHE_DIR / urllib.parse.quote(str(project_root), safe="")
 
 
-def build_cache_xml_path(project_root: pathlib.Path) -> pathlib.Path:
-    return build_cache_dir(project_root) / "coverage.xml"
+def build_baseline_dir(project_root: pathlib.Path, baseline_name: str) -> pathlib.Path:
+    return build_cache_dir(project_root) / urllib.parse.quote(baseline_name, safe="")
 
 
-def build_cache_sources_dir(project_root: pathlib.Path) -> pathlib.Path:
-    return build_cache_dir(project_root) / "sources"
+def build_cache_xml_path(project_root: pathlib.Path, baseline_name: str) -> pathlib.Path:
+    return build_baseline_dir(project_root, baseline_name) / "coverage.xml"
+
+
+def build_cache_sources_dir(project_root: pathlib.Path, baseline_name: str) -> pathlib.Path:
+    return build_baseline_dir(project_root, baseline_name) / "sources"
+
+
+def list_existing_baselines(project_root: pathlib.Path) -> list[str]:
+    cache_root: typing.Final = build_cache_dir(project_root)
+    if not cache_root.is_dir():
+        return []
+    return sorted(
+        urllib.parse.unquote(entry.name) for entry in cache_root.iterdir() if entry.is_dir()
+    )
 
 
 def make_safe_subpath(filename: str) -> pathlib.Path:
@@ -281,26 +297,32 @@ def render_buckets(
             print(f"  {display_path}:{span}")
 
 
-def handle_save_baseline() -> int:
+def handle_save_baseline(baseline_name: str) -> int:
     project_root: typing.Final = find_project_root()
-    xml_output_path: typing.Final = build_cache_xml_path(project_root)
+    xml_output_path: typing.Final = build_cache_xml_path(project_root, baseline_name)
     generate_coverage_xml(project_root, xml_output_path)
     total_pct, baseline_files = parse_coverage_xml(xml_output_path)
-    sources_dir: typing.Final = build_cache_sources_dir(project_root)
+    sources_dir: typing.Final = build_cache_sources_dir(project_root, baseline_name)
     snapshot_count: typing.Final = snapshot_sources_to_cache(project_root, baseline_files.keys(), sources_dir)
-    print(f"Saved baseline for {project_root}")
+    print(f"Saved baseline {baseline_name!r} for {project_root}")
     print(f"  path:    {xml_output_path}")
     print(f"  sources: {snapshot_count} files in {sources_dir}")
     print(f"  total:   {total_pct:.2f}%")
     return 0
 
 
-def handle_diff() -> int:
+def handle_diff(baseline_name: str) -> int:
     project_root: typing.Final = find_project_root()
-    baseline_xml_path: typing.Final = build_cache_xml_path(project_root)
+    baseline_xml_path: typing.Final = build_cache_xml_path(project_root, baseline_name)
     if not baseline_xml_path.exists():
-        sys.exit(f"FAIL: no baseline for {project_root}. Run `save-baseline` first.")
-    sources_dir: typing.Final = build_cache_sources_dir(project_root)
+        existing: typing.Final = list_existing_baselines(project_root)
+        hint: typing.Final = (
+            f" Available baselines: {', '.join(repr(name) for name in existing)}."
+            if existing
+            else " Run `save-baseline` first."
+        )
+        sys.exit(f"FAIL: no baseline {baseline_name!r} for {project_root}.{hint}")
+    sources_dir: typing.Final = build_cache_sources_dir(project_root, baseline_name)
     with tempfile.TemporaryDirectory(prefix="cmp-cov-") as tmp_dir:
         head_xml_path = pathlib.Path(tmp_dir) / "head.xml"
         generate_coverage_xml(project_root, head_xml_path)
@@ -318,7 +340,7 @@ def handle_diff() -> int:
 
     saved_at: typing.Final = datetime.datetime.fromtimestamp(baseline_xml_path.stat().st_mtime)
     print(f"Project:  {project_root}")
-    print(f"Baseline: {baseline_xml_path}")
+    print(f"Baseline: {baseline_name!r} ({baseline_xml_path})")
     print(f"Saved:    {saved_at:%Y-%m-%d %H:%M:%S}")
 
     total_delta: typing.Final = head_total - baseline_total
@@ -347,10 +369,18 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subcommands: typing.Final = arg_parser.add_subparsers(dest="cmd", required=True)
-    subcommands.add_parser("save-baseline", help="Save current coverage as the project baseline.")
-    subcommands.add_parser("diff", help="Diff current coverage against the saved baseline.")
+    save_parser: typing.Final = subcommands.add_parser(
+        "save-baseline", help="Save current coverage as a named project baseline.",
+    )
+    save_parser.add_argument("name", nargs="?", default=DEFAULT_BASELINE_NAME)
+    diff_parser: typing.Final = subcommands.add_parser(
+        "diff", help="Diff current coverage against a named baseline.",
+    )
+    diff_parser.add_argument("name", nargs="?", default=DEFAULT_BASELINE_NAME)
     cli_args: typing.Final = arg_parser.parse_args()
-    return handle_save_baseline() if cli_args.cmd == "save-baseline" else handle_diff()
+    if cli_args.cmd == "save-baseline":
+        return handle_save_baseline(cli_args.name)
+    return handle_diff(cli_args.name)
 
 
 if __name__ == "__main__":
